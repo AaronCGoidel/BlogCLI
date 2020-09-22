@@ -11,10 +11,10 @@ import (
 )
 
 // AUTHOR : name of the post's author
-const AUTHOR string = "Aaron Goidel"
+const author string = "Aaron Goidel"
 
 // PATH : path to blog posts
-const PATH string = "/Users/agoidel/Documents/development/this-is-me/pages/blog/posts"
+const pathToPostDir string = "/Users/agoidel/Documents/development/this-is-me/pages/blog/posts"
 
 type blogT struct {
 	title     string
@@ -25,11 +25,17 @@ type blogT struct {
 	lines     []string
 }
 
-func parseRawMd(file *os.File, blog *blogT) {
+func parseRawMd(path string, blog *blogT) {
+	inFile, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	defer inFile.Close()
+
 	numWords := 0
 	var isCode bool
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(inFile)
 	for scanner.Scan() {
 		line := scanner.Text()
 		blog.lines = append(blog.lines, line)
@@ -95,32 +101,7 @@ func slugify(str string) string {
 	return slug
 }
 
-func main() {
-	fileName := flag.String("f", "", "Path to markdown file. (Required)")
-	push := flag.Bool("push", false, "Push new blog post to master.")
-
-	flag.Parse()
-
-	if *fileName == "" {
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	if !*push {
-	}
-
-	var post blogT
-
-	post.author = AUTHOR
-
-	inFile, err := os.Open(*fileName)
-	if err != nil {
-		panic(err)
-	}
-	defer inFile.Close()
-
-	parseRawMd(inFile, &post)
-
+func getUserInputtedFields(post *blogT) {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print("Enter title: ")
 	rawTitle, _ := reader.ReadString('\n')
@@ -136,10 +117,10 @@ func main() {
 	} else {
 		post.slug = slugify(rawTitle)
 	}
+}
 
-	post.timeStamp = time.Now()
-
-	outFile, err := os.Create(PATH + "/" + post.slug + ".md")
+func writePost(post *blogT) {
+	outFile, err := os.Create(pathToPostDir + "/" + post.slug + ".md")
 	if err != nil {
 		panic(err)
 	}
@@ -164,4 +145,31 @@ func main() {
 		fmt.Fprintln(outFile, line)
 	}
 	outFile.Close()
+}
+
+func main() {
+	fileName := flag.String("f", "", "Path to markdown file. (Required)")
+	push := flag.Bool("push", false, "Push new blog post to master.")
+
+	flag.Parse()
+
+	if *fileName == "" {
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	if !*push {
+	}
+
+	var post blogT
+
+	post.author = author
+
+	parseRawMd(*fileName, &post)
+
+	getUserInputtedFields(&post)
+
+	post.timeStamp = time.Now()
+
+	writePost(&post)
 }
