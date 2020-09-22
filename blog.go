@@ -2,19 +2,18 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
 
-// AUTHOR : name of the post's author
 const author string = "Aaron Goidel"
-
-// PATH : path to blog posts
-const pathToPostDir string = "/Users/agoidel/Documents/development/this-is-me/pages/blog/posts"
+const postDirPath string = "/Users/agoidel/Documents/development/this-is-me/pages/blog/posts"
 
 type blogT struct {
 	title     string
@@ -24,6 +23,13 @@ type blogT struct {
 	wordCount int
 	lines     []string
 }
+
+type configurationT struct {
+	Author   string `json:"author"`
+	PostPath string `json:"postPath"`
+}
+
+var config configurationT
 
 func parseRawMd(path string, blog *blogT) {
 	inFile, err := os.Open(path)
@@ -120,7 +126,8 @@ func getUserInputtedFields(post *blogT) {
 }
 
 func writePost(post *blogT) {
-	outFile, err := os.Create(pathToPostDir + "/" + post.slug + ".md")
+	postPath, _ := filepath.EvalSymlinks(config.PostPath)
+	outFile, err := os.Create(postPath + "/" + post.slug + ".md")
 	if err != nil {
 		panic(err)
 	}
@@ -147,6 +154,45 @@ func writePost(post *blogT) {
 	outFile.Close()
 }
 
+func getCleanInput(prompt string) string {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print(prompt)
+	raw, _ := reader.ReadString('\n')
+
+	return strings.TrimSuffix(raw, "\n")
+}
+
+func runSetup() {
+	home := os.Getenv("HOME") + "/.blog"
+	configPath := home + "/.config.json"
+
+	if _, err := os.Stat(configPath); err == nil {
+		file, _ := os.Open(configPath)
+		defer file.Close()
+		decoder := json.NewDecoder(file)
+		err := decoder.Decode(&config)
+		if err != nil {
+			fmt.Println("error:", err)
+		}
+	} else if os.IsNotExist(err) {
+		os.Mkdir(home, 0755)
+		configFile, err := os.Create(configPath)
+		if err != nil {
+			panic(err)
+		}
+
+		encoder := json.NewEncoder(configFile)
+
+		config.Author = getCleanInput("Enter your name: ")
+		config.PostPath = getCleanInput("Path to blog posts: ")
+
+		encoder.Encode(config)
+
+		configFile.Close()
+	}
+}
+
 func main() {
 	fileName := flag.String("f", "", "Path to markdown file. (Required)")
 	push := flag.Bool("push", false, "Push new blog post to master.")
@@ -161,9 +207,11 @@ func main() {
 	if !*push {
 	}
 
+	runSetup()
+
 	var post blogT
 
-	post.author = author
+	post.author = config.Author
 
 	parseRawMd(*fileName, &post)
 
