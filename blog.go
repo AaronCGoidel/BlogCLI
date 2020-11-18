@@ -10,10 +10,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
-)
 
-const author string = "Aaron Goidel"
-const postDirPath string = "/Users/agoidel/Documents/development/this-is-me/pages/blog/posts"
+	"github.com/go-git/go-git"
+	"github.com/go-git/go-git/plumbing/object"
+)
 
 type blogT struct {
 	title     string
@@ -26,16 +26,28 @@ type blogT struct {
 
 type configurationT struct {
 	Author   string `json:"author"`
-	PostPath string `json:"postPath"`
+	Email    string `json:"email"`
+	ProjPath string `json:"projPath"`
+	PostPath string `json:"postSubDir"`
 }
 
 var config configurationT
 
-func parseRawMd(path string, blog *blogT) {
-	inFile, err := os.Open(path)
+func log(tag string, msg string) {
+	out := fmt.Sprintf("[%s]: %s", tag, msg)
+	fmt.Println(out)
+}
+
+func handleErr(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func parseRawMd(path string, blog *blogT) {
+	log("INFO", "begin parsing markdown")
+	inFile, err := os.Open(path)
+	handleErr(err)
 	defer inFile.Close()
 
 	numWords := 0
@@ -80,6 +92,8 @@ func parseRawMd(path string, blog *blogT) {
 		panic(err)
 	}
 	blog.wordCount = numWords
+	log("INFO", "finished parsing raw blog material")
+	log("INFO", fmt.Sprintf("final word count: %d", numWords))
 }
 
 func toTitle(str string) string {
@@ -98,6 +112,7 @@ func toTitle(str string) string {
 }
 
 func slugify(str string) string {
+	log("INFO", "generating slug")
 	slug := strings.ToLower(str)
 	r := regexp.MustCompile("[^\\w ]+")
 	slug = r.ReplaceAllString(slug, "")
@@ -126,16 +141,15 @@ func getUserInputtedFields(post *blogT) {
 }
 
 func writePost(post *blogT) {
-	postPath, _ := filepath.EvalSymlinks(config.PostPath)
+	postPath, _ := filepath.EvalSymlinks(config.ProjPath + "/" + config.PostPath)
 	outFile, err := os.Create(postPath + "/" + post.slug + ".md")
-	if err != nil {
-		panic(err)
-	}
+	handleErr(err)
 	defer outFile.Close()
 
+	log("INFO", "generating front matter")
 	frontMatter := []string{
 		"---",
-		"title: " + post.title,
+		fmt.Sprintf("title: \"%s\"", post.title),
 		"author: " + post.author,
 		"slug: " + post.slug,
 		fmt.Sprintf("date: \"%s\"", post.timeStamp.Format("2006-01-02 15:04:05")),
@@ -148,10 +162,51 @@ func writePost(post *blogT) {
 	}
 	fmt.Fprintln(outFile, "")
 
+	log("INFO", "writing data to file")
 	for _, line := range post.lines {
 		fmt.Fprintln(outFile, line)
 	}
 	outFile.Close()
+	log("INFO", "done generating post")
+}
+
+func deployPost(post blogT) {
+	log("INFO", "deploying post")
+
+	repoPath, _ := filepath.EvalSymlinks(config.ProjPath)
+	repo, err := git.PlainOpen(repoPath)
+	handleErr(err)
+
+	wTree, err := repo.Worktree()
+
+	postfile := config.PostPath + "/" + post.slug + ".md"
+	_, err = wTree.Add(postfile)
+	handleErr(err)
+	log("GIT", "added file "+postfile)
+
+	log("GIT", "checking status")
+	status, err := wTree.Status()
+	handleErr(err)
+	fmt.Println(status)
+
+	commit, err := wTree.Commit("feat(blog): add new post", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  config.Author,
+			Email: config.Email,
+			When:  time.Now(),
+		},
+	})
+	handleErr(err)
+
+	log("GIT", "committing post")
+	obj, err := repo.CommitObject(commit)
+	handleErr(err)
+
+	fmt.Println(obj)
+
+	log("GIT", "pushing to remote repository")
+	err = repo.Push(&git.PushOptions{RemoteName: "origin"})
+	handleErr(err)
 }
 
 func getCleanInput(prompt string) string {
@@ -164,33 +219,38 @@ func getCleanInput(prompt string) string {
 }
 
 func runSetup() {
+	log("SETUP", "starting setup routine")
 	home := os.Getenv("HOME") + "/.blog"
 	configPath := home + "/.config.json"
 
 	if _, err := os.Stat(configPath); err == nil {
+		log("SETUP", "found config file")
 		file, _ := os.Open(configPath)
 		defer file.Close()
 		decoder := json.NewDecoder(file)
 		err := decoder.Decode(&config)
-		if err != nil {
-			fmt.Println("error:", err)
-		}
+		handleErr(err)
 	} else if os.IsNotExist(err) {
+		log("SETUP", "no config file found")
 		os.Mkdir(home, 0755)
 		configFile, err := os.Create(configPath)
-		if err != nil {
-			panic(err)
-		}
+		handleErr(err)
+		log("SETUP", "created new config file at: "+configPath)
 
 		encoder := json.NewEncoder(configFile)
 
 		config.Author = getCleanInput("Enter your name: ")
-		config.PostPath = getCleanInput("Path to blog posts: ")
+		config.Email = getCleanInput("Enter your email: ")
+		config.ProjPath = getCleanInput("Path to git repo for blog: ")
+		subdirPrompt := fmt.Sprintf("Subdirectory containing blog posts: %s", config.ProjPath)
+		config.PostPath = getCleanInput(subdirPrompt)
 
 		encoder.Encode(config)
+		log("SETUP", "wrote preferences to config")
 
 		configFile.Close()
 	}
+	log("SETUP", "done setup!")
 }
 
 func main() {
@@ -202,9 +262,6 @@ func main() {
 	if *fileName == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
-	}
-
-	if !*push {
 	}
 
 	runSetup()
@@ -220,4 +277,8 @@ func main() {
 	post.timeStamp = time.Now()
 
 	writePost(&post)
+
+	if *push {
+		deployPost(post)
+	}
 }
